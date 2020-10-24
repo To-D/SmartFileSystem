@@ -1,4 +1,6 @@
-package Block;
+package File;
+
+import Block.MyBlock;
 
 public class Buffer {
     private final byte[] writeBuffer;

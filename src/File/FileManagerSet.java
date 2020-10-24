@@ -37,4 +37,6 @@ public class FileManagerSet {
     public FileManager getFileManager(int id){
         return fileManagers[id - 1];
     }
+
+    public int getSize(){return FILE_MANAGER_NUM;}
 }

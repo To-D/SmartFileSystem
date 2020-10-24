@@ -9,8 +9,8 @@ public interface File {
 
     Id getFileId();
     FileManager getFileManager();
-    byte[] read(int length) throws IOException;
-    void write(byte[] b) throws IOException;
+    byte[] read(int length);
+    void write(byte[] b);
     default long pos(){
         return move(0, MOVE_CURR);
     }
@@ -19,5 +19,5 @@ public interface File {
     // 使用buffer需实现
     void close();
     long size();
-    void setSize(long newSize) throws IOException;
+    void setSize(long newSize);
 }

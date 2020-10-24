@@ -4,8 +4,8 @@ import java.io.IOException;
 
 public interface BlockManager {
     Block getBlock(Id indexId);
-    Block newBlock(byte[] b) throws IOException;
-    default Block newEmptyBlock(int blockSize) throws IOException {
+    Block newBlock(byte[] b);
+    default Block newEmptyBlock(int blockSize){
         return newBlock(new byte[blockSize]);
     }
 }
