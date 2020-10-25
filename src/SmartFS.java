@@ -23,7 +23,6 @@ public class SmartFS {
         this.fileManagerNum = FileManagerSet.getInstance().getSize();
         System.out.println("You have "+this.fileManagerNum+
                 " file managers to use, and you can refer them by fm1 - fm"+this.fileManagerNum);
-
         for(;;){
             printPrompt();
             Scanner scanner = new Scanner(System.in);
@@ -60,12 +59,45 @@ public class SmartFS {
                 case "smart-copy":
                     smartCopy(instr);
                     break;
+                case "close":
+                    close(instr);
+                    break;
                 default:
                     System.out.println("[ERROR]: Invalid instruction");
                     printHelpInformation();
                     break;
             }
         }
+    }
+
+    private void close(String[] instr){
+        if(instr.length != 3){
+            System.out.println(new ErrorCode(ErrorCode.WRONG_INSTRUCTION).getMessage());
+            System.out.println("    close fileManager fileName");
+            return;
+        }
+        FileManager fileManager = getFileManagerByName(instr[1]);
+        if (fileManager == null) {
+            System.out.println(new ErrorCode(ErrorCode.WRONG_FILE_MANAGER_NAME, instr[1]).getMessage());
+            return;
+        }
+
+        File file = null;
+        try {
+            file = fileManager.getFile(new FileId(instr[2]));
+        } catch (ErrorCode fileNotFound) {
+            System.out.println(fileNotFound.getMessage());
+            return;
+        }
+
+        if(file != null){
+            try {
+                file.close();
+            }catch(ErrorCode errorCode){
+                System.out.println(errorCode.getMessage());
+            }
+        }
+
     }
 
     private void getSize(String[] instr) {
@@ -85,11 +117,11 @@ public class SmartFS {
             file = fileManager.getFile(new FileId(instr[2]));
         } catch (ErrorCode fileNotFound) {
             System.out.println(fileNotFound.getMessage());
+            return;
         }
 
         if(file != null)
             System.out.println(file.size());
-
     }
 
     private void getCursor(String[] instr) {
@@ -109,6 +141,7 @@ public class SmartFS {
             file = fileManager.getFile(new FileId(instr[2]));
         } catch (ErrorCode fileNotFound) {
             System.out.println(fileNotFound.getMessage());
+            return;
         }
 
         if(file != null){
@@ -146,8 +179,8 @@ public class SmartFS {
             file.setSize(size);
         } catch (NumberFormatException numberFormatException) {
             System.out.println(new ErrorCode(ErrorCode.WRONG_INSTRUCTION, instr[3]).getMessage());
-        } catch(ErrorCode passiveSize){
-            System.out.println(passiveSize.getMessage());
+        } catch(ErrorCode errorCode){
+            System.out.println(errorCode.getMessage());
         }
     }
 
@@ -217,6 +250,7 @@ public class SmartFS {
         } catch(ErrorCode invalidId){
             System.out.println(invalidId.getMessage());
         }
+
         // 这里block==null是因为读出来的就是空的
         if(block == null && isChange == 1){
             System.out.println("[Nothing here]");
@@ -250,10 +284,9 @@ public class SmartFS {
             try {
                 Util.smart_write(instr[2],pos,fileManager);
             } catch (ErrorCode errorCode) {
-                errorCode.printStackTrace();
-                System.out.println(new ErrorCode(ErrorCode.IO_EXCEPTION).getMessage());// 写的错误都包装成IO_Exception
+                System.out.println(errorCode.getMessage());
             }
-        }else{
+        } else {
             System.out.println(new ErrorCode(ErrorCode.WRONG_FILE_MANAGER_NAME, instr[1]).getMessage());
         }
 
@@ -295,11 +328,16 @@ public class SmartFS {
         }
 
         // 保存文件的当前光标，之后还可以恢复
-        long tmpCursorFrom = fileFrom.pos();
-        long tmpCursorTo = fileFrom.pos();
-
-        fileFrom.move(0,File.MOVE_HEAD);
-        fileTo.move(0,File.MOVE_HEAD);
+        long tmpCursorFrom = -1;
+        long tmpCursorTo = -1;
+        try {
+            tmpCursorFrom = fileFrom.pos();
+            tmpCursorTo = fileFrom.pos();
+            fileFrom.move(0,File.MOVE_HEAD);
+            fileTo.move(0,File.MOVE_HEAD);
+        } catch (ErrorCode errorCode) {
+            System.out.println(errorCode.getMessage());
+        }
 
         try {
             byte[] content = fileFrom.read((int) (fileFrom.size() - fileFrom.pos()));
@@ -381,6 +419,7 @@ public class SmartFS {
         System.out.println("    smart-write - 'smart-write fileManager fileName pos' input some content and insert them into the file from pos");
         System.out.println("    smart-hex   - 'smart-hex blockManagerId blockId' read the data in the block and represent them in hexadecimal");
         System.out.println("    smart-copy  - 'smart-copy fileManagerFrom fileNameFrom fileManagerTo fileNameTo'copy the content from a file to another");
+        System.out.println("    close       - 'close fileManager fileName' flush all the content in the buffer of file");
     }
 
     private FileManager getFileManagerByName(String fileManagerName){

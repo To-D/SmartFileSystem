@@ -47,12 +47,20 @@ public class Util {
     }
 
     // write进去的具体内容通过console输入，应该实现插入而不是覆盖！
+
+    /**
+     * @throws ErrorCode - FILE_NOT_FOUND/
+     */
     public static void smart_write(String fileName, int index,FileManager fileManager){
-        File file = getFile(fileName, fileManager);
+        MyFile file = (MyFile)getFile(fileName, fileManager); // FILE_NOT_FOUND
         if(index > file.size()){
-            file.setSize(index);
+            file.setSize(index);// 如果在size之外的地方写了，默认中间插入0
         }
-        file.move(index,File.MOVE_HEAD);
+
+        if(file.getCursor() != index){
+            file.move(index,File.MOVE_HEAD); // CURSOR_OUT_OF_RANGE
+        }
+
         System.out.print("Please input:");
         Scanner in = new Scanner(System.in);
         byte[] content = in.nextLine().getBytes();
@@ -60,10 +68,10 @@ public class Util {
         try {
             file.write(content);
         } catch (ErrorCode errorCode) {
-            file.move(index,File.MOVE_HEAD);
+            file.move(index,File.MOVE_HEAD);// 恢复cursor
             throw new ErrorCode(ErrorCode.IO_EXCEPTION);
         }
-        file.move(index+ content.length,File.MOVE_HEAD); // 消除重写导致的指针始终在末尾的影响
+//        file.move(index+ content.length,File.MOVE_HEAD); // 消除因为block的不可修改导致的，即使微小的修改，指针也始终在末尾的影响
     }
 
     public static void smart_copy(String from, String to, FileManager fileManagerFrom, FileManager fileManagerTo){

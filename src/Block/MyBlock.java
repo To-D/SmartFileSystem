@@ -51,6 +51,9 @@ public class MyBlock implements interfaces.Block {
     }
 
     @Override
+    /**
+     * @throws ErrorCode - IO_EXCEPTION、FILE_NOT_FOUND
+     */
     public byte[] read() throws ErrorCode{
         if(this.size < 0){
             throw new ErrorCode(ErrorCode.IO_EXCEPTION);
@@ -103,9 +106,9 @@ public class MyBlock implements interfaces.Block {
 
     // write data and meta
     public void createBlock(byte[] data) throws ErrorCode{
-        if(data.length > CAPABILITY){
-            throw new ErrorCode(ErrorCode.BYTE_ARRAY_TOO_LARGE);
-        }
+//        if(data.length > CAPABILITY){
+//            throw new ErrorCode(ErrorCode.BYTE_ARRAY_TOO_LARGE);
+//        }
 
         if(data.length == 0){
             this.size = 0;

@@ -6,7 +6,6 @@ import Block.MyBlock;
 import Block.MyBlockManager;
 import Exceptions.ErrorCode;
 import interfaces.Block;
-import interfaces.BlockManager;
 import interfaces.FileManager;
 import interfaces.Id;
 
@@ -19,12 +18,12 @@ public class MyFile implements interfaces.File {
     private long size; //size在运行时候需要读取，不能写死
     private long cursor; // 下一个读写的字节的地址，也是之前字节的总数,取值范围为0~size
 
-    private Buffer buffer;
+    private final Buffer buffer;
     private final int LOGIC_BLOCK_NUM = 3;
 
     // 从meta文件里获取的信息
-    private Id fileId;
-    private final ArrayList<int[]> storeBlocks = new ArrayList<>();
+    private final Id fileId;
+    private ArrayList<int[]> storeBlocks = new ArrayList<>();
 
     public MyFile(FileManager fileManager, Id fileId, String path) {
         this.fileManager = fileManager;
@@ -36,6 +35,7 @@ public class MyFile implements interfaces.File {
             throw new ErrorCode(ErrorCode.INITIAL_FILE_FAILED);
         }
         this.cursor = 0;
+        this.buffer = new Buffer();
     }
 
     @Override
@@ -49,9 +49,9 @@ public class MyFile implements interfaces.File {
     }
 
     @Override
-    // 从当前位置开始读取length长度的数据，可以跨block
     /**
-     * @throws ErrorCode - CURSOR_OUT_OF_RANGE,
+     * 从cursor开始读取length长度的数据，cursor改变
+     * @throws ErrorCode - CURSOR_OUT_OF_RANGE/ BLOCK_BROKEN /FILE_NOT_FOUND/IO_EXCEPTION
      */
     public byte[] read(int length) throws ErrorCode {
         // 对length做正确性检查
@@ -85,16 +85,40 @@ public class MyFile implements interfaces.File {
     }
 
     @Override
-    // 从当前光标位置插入b字节数据,不可重写
+    /**
+     * 在cursor处插入b中的数据
+     * @throws ErrorCode -
+     */
     public void write(byte[] b){
+        // 先把数据写到buffer里
+        for(int i =0; i < b.length; i++){
+            if(!buffer.write(b[i])){
+                close();// buffer满了,写进去
+                buffer.write(b[i]);
+            }
+        }
+    }
+
+    /**
+     * 实际往硬盘里写数据，会更新size和cursor
+     * @throws ErrorCode
+     * readBlock - IO_EXCEPTION / BLOCK_BROKEN（需要被用户知道） / FILE_NOT_FOUND
+     * read - CURSOR_OUT_OF_RANGE(需要用户知道） / BLOCK_BROKEN /FILE_NOT_FOUND/IO_EXCEPTION
+     *
+     */
+    public void writeIntoBlock(byte[] b){
         // 1. 内容整合
         int blockSize = MyBlock.getCapability();
         int pointer = (int) this.cursor % blockSize;
         int blocksIndex = (int)this.cursor / blockSize;
+
         // 从blockIndex的开头读influenceContentLength大小的数据
         byte[] headContent = readBlock(0,pointer,blocksIndex);
         int tailContentLength = (int)(this.size - this.cursor);
         byte[] tailContent = read(tailContentLength);
+
+        this.cursor -= tailContentLength;//恢复上一步操作导致的cursor改变
+
         byte[] newContent = new byte[headContent.length + b.length + tailContentLength];
         System.arraycopy(headContent,0,newContent,0,pointer);
         System.arraycopy(b,0,newContent,pointer,b.length);
@@ -106,51 +130,64 @@ public class MyFile implements interfaces.File {
         int start = 0;
         BlockManagerSet blockManagerSet = BlockManagerSet.getInstance();
 
-        while(newContentLength>0){
-            // 原先的block删除腾出空间
-            if(blocksIndex < this.storeBlocks.size()){
-                int[] oldBlocks = this.storeBlocks.get(blocksIndex);
-                for(int i =0; i <oldBlocks.length; i+=2 ){
-                    MyBlockManager blockManager = (MyBlockManager) blockManagerSet.getBlockManager(oldBlocks[i]);
-                    BlockId blockId = new BlockId(oldBlocks[i+1]);
-                    blockManager.removeBlock(blockId);
+        ArrayList<int[]> tmp = this.storeBlocks;
+        try {
+            // 创建新blocks并填入storeblocks
+            while (newContentLength > 0) {
+                // 获取data
+                byte[] data;
+                int min = Math.min(blockSize, newContentLength);
+                data = new byte[min];
+                System.arraycopy(newContent, start, data, 0, min);
+
+                // 写入block
+                int[] blocks = new int[LOGIC_BLOCK_NUM * 2];
+                for (int i = 0; i < LOGIC_BLOCK_NUM * 2; i += 2) {
+                    MyBlockManager blockManager = (MyBlockManager) BlockManagerSet.getInstance().getRandomBlockManager();
+                    Block block = blockManager.newBlock(data); // 可能会扔block create error 在这正式写的！！！！！！！！
+                    blocks[i] = blockManager.getId();
+                    blocks[i + 1] = ((BlockId) block.getIndexId()).getId();
                 }
+
+                this.storeBlocks.add(blocksIndex, blocks);
+                newContentLength -= min;
+                start += min;
+                blocksIndex++;
             }
+        }catch (ErrorCode errorCode){
+            this.storeBlocks = tmp; // 如果出错，恢复storeBlocks
+            throw  errorCode;
+        }
 
-            // 获取data
-            byte[] data;
-            int min = Math.min(blockSize,newContentLength);
-            data = new byte[min];
-            System.arraycopy(newContent,start,data,0,min);
-
-            // 写入block
-            int[] blocks = new int[LOGIC_BLOCK_NUM*2];
-            for(int i =0;i <LOGIC_BLOCK_NUM*2; i += 2){
-                MyBlockManager blockManager = (MyBlockManager)BlockManagerSet.getInstance().getRandomBlockManager();
-                Block block = blockManager.newBlock(data); // 可能会扔block create error
-                blocks[i] = blockManager.getId();
-                blocks[i+1] = ((BlockId) block.getIndexId()).getId();
+        // 运行到这里说明顺利创建并写入了data文件，接下来才删除data
+        // 把原先的data和meta删除腾出空间
+        while(blocksIndex < this.storeBlocks.size()){
+            int[] oldBlocks = this.storeBlocks.get(blocksIndex);
+            for(int i =0; i <oldBlocks.length; i+=2 ){
+                MyBlockManager blockManager = (MyBlockManager) blockManagerSet.getBlockManager(oldBlocks[i]);
+                BlockId blockId = new BlockId(oldBlocks[i+1]);
+                blockManager.removeBlock(blockId);
             }
-
-            if(blocksIndex < this.storeBlocks.size())
-                this.storeBlocks.remove(blocksIndex);
-
-            this.storeBlocks.add(blocksIndex,blocks);
-
-            newContentLength -= min;
-            start += min;
+            this.storeBlocks.remove(blocksIndex);
             blocksIndex++;
         }
 
+        // 文件元信息放到最后更新，上述过程中出现仍和exception都会上抛，因此不会更改meta，保证基本的一致性
         this.size += b.length;
+        try {
+            writeMeta();
+        }catch (ErrorCode errorCode){
+            this.size -= b.length;
+            throw  errorCode;
+        }
         this.cursor += b.length;
-        // 3. 更新meta
-        writeMeta();
+
     }
 
     @Override
     // 把指针移到距where位置offset(offset可正可负)处
     public long move(long offset, int where) {
+        close();
         long newCursor = -1;
         switch(where){
             case MOVE_CURR:
@@ -172,7 +209,11 @@ public class MyFile implements interfaces.File {
 
     @Override
     public void close() {
-
+        byte[] data = buffer.copy(); // 把buffer里的数据取出
+        if(data.length > 0) {
+            writeIntoBlock(data);
+            buffer.clear(); // 清空buffer
+        }
     }
 
     @Override
@@ -181,12 +222,16 @@ public class MyFile implements interfaces.File {
     }
 
     @Override
+    /**
+     * Set the new size of file and change cursor to the end of file
+     */
     public void setSize(long newSize){
+        close();
+
         if(newSize < 0){
             throw new ErrorCode(ErrorCode.PASSIVE_SIZE);
         }
         // 删除
-        // 3. 新建一个Block存放数据尾巴，然后存到storeBlocks中
         if(newSize < this.size){
             // 1. 计算删除后的尾部，并把数据尾巴读出来
             int newEnd = (int) newSize;
@@ -204,6 +249,8 @@ public class MyFile implements interfaces.File {
                     newBlock[i+1] = ((BlockId) block.getIndexId()).getId();
                 }
                 this.storeBlocks.add(influenceBlockIndex,newBlock);
+            }else{
+                influenceBlockIndex--;// 没有尾巴上的数据，则从influenceBlockIndex开始删，配合下面的+1使用在这里先-1
             }
 
             // 3. 把受影响的block都remove掉，并从storeBlocks里清除
@@ -219,12 +266,10 @@ public class MyFile implements interfaces.File {
             }
             this.size = newSize;
         }else{
-            // 后面填充0，属于重写不受影响
             int len = (int)(newSize-this.size);
             byte[] newContent = new byte[len];
             this.cursor = move(0,MOVE_TAIL);
-            write(newContent);
-            this.size = newSize;
+            writeIntoBlock(newContent);//立刻写入硬盘中，不必经过buffer
         }
 
         move(0,MOVE_TAIL);
@@ -232,7 +277,7 @@ public class MyFile implements interfaces.File {
     }
 
     /**
-     * @throws ErrorCode - IO_Exception,  BLOCK_BROKEN
+     * @throws ErrorCode - IO_EXCEPTION / BLOCK_BROKEN（需要被用户知道） / FILE_NOT_FOUND
      */
     // 从一个block的where处开始，取length长度的数据出来
     private byte[] readBlock(int where, int length, int blockIndex) throws ErrorCode {
@@ -251,7 +296,7 @@ public class MyFile implements interfaces.File {
                 MyBlockManager blockManager = (MyBlockManager) BlockManagerSet.getInstance().getBlockManager(BMId);
                 MyBlock block = ((MyBlock) blockManager.getBlock(new BlockId(blockId)));
                 if(!block.isBroken()){
-                    byte[] blockData = block.read();
+                    byte[] blockData = block.read(); // IO_EXCEPTION/FILE_NOT_FOUND
                     System.arraycopy(blockData, where, result, 0, length);
                     return result;
                 }else{
@@ -322,5 +367,8 @@ public class MyFile implements interfaces.File {
             throw new ErrorCode(ErrorCode.IO_EXCEPTION);
         }
 
+    }
+    public long getCursor(){
+        return this.cursor;
     }
 }
